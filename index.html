@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Mystic Orb</title>
+    <title>Quantum Energy Orb</title>
     <style>
         body {
             margin: 0;
@@ -18,10 +18,10 @@
         canvas {
             display: block;
         }
-        .message {
+        .instructions {
             position: absolute;
             bottom: 20px;
-            color: rgba(255, 255, 255, 0.7);
+            color: rgba(255,255,255,0.7);
             font-family: Arial, sans-serif;
             text-align: center;
             width: 100%;
@@ -32,12 +32,12 @@
 </head>
 <body>
     <canvas id="orbCanvas"></canvas>
-    <div class="message" id="statusMessage">
-        Waiting for cosmic connection...
+    <div class="instructions">
+        Tilt device to move | Shake/click to energize | Open multiple tabs for magnetic interaction
     </div>
 
     <script>
-        // ====== SETUP ======
+        // ========== SETUP ==========
         const canvas = document.getElementById('orbCanvas');
         const ctx = canvas.getContext('2d');
         let width = window.innerWidth;
@@ -45,226 +45,322 @@
         canvas.width = width;
         canvas.height = height;
 
-        // ====== MYSTIC ORB ======
+        // ========== QUANTUM ORB PHYSICS ==========
         const orb = {
-            x: width / 2,
-            y: height / 2,
+            position: { x: width/2, y: height/2 },
+            velocity: { x: 0, y: 0 },
             radius: Math.min(width, height) * 0.25,
-            energy: 30,
-            maxEnergy: 150,
-            color: { h: 200, s: 100, l: 60 },
-            pulse: 0,
-            state: 'waiting', // 'waiting', 'syncing', 'merging', 'dominant', 'vanishing'
-            syncProgress: 0,
-            mergeTime: 0
+            mass: 1,
+            
+            // Energy properties
+            energy: 0,
+            maxEnergy: 100,
+            plasmaNodes: [],
+            color: { h: 180, s: 100, l: 50 },
+            
+            // Magnetic field
+            magneticField: {
+                strength: 0,
+                polarity: 1
+            }
         };
 
-        // ====== TAB COMMUNICATION ======
-        const tabID = Math.random().toString(36).substr(2, 9);
-        let otherOrbs = [];
-        let dominantOrb = null;
+        // Create plasma nodes for internal energy waves
+        function initPlasmaNodes() {
+            const nodeCount = 36;
+            for (let i = 0; i < nodeCount; i++) {
+                const angle = (i / nodeCount) * Math.PI * 2;
+                orb.plasmaNodes.push({
+                    angle: angle,
+                    radius: 0.7 + Math.random() * 0.3,
+                    energy: Math.random(),
+                    speed: 0.02 + Math.random() * 0.03,
+                    phase: Math.random() * Math.PI * 2
+                });
+            }
+        }
+        initPlasmaNodes();
 
-        const channel = new BroadcastChannel('mystic_orb');
-        channel.addEventListener('message', (e) => {
-            if (e.data.id === tabID) return;
+        // ========== DEVICE MOTION ==========
+        const motion = {
+            gamma: 0,
+            beta: 0,
+            lastShake: 0
+        };
 
-            // Update other orbs
-            const existing = otherOrbs.find(o => o.id === e.data.id);
-            if (existing) {
-                Object.assign(existing, e.data);
-            } else {
-                otherOrbs.push(e.data);
-                if (e.data.state === 'syncing') {
-                    startSyncing();
+        window.addEventListener('deviceorientation', handleOrientation);
+        window.addEventListener('mousemove', handleMouseMove);
+        window.addEventListener('click', energizeOrb);
+
+        function handleOrientation(e) {
+            motion.gamma = e.gamma || 0;
+            motion.beta = e.beta || 0;
+            
+            // Detect shake
+            if (Date.now() - motion.lastShake > 1000) {
+                const accel = Math.abs(e.gamma) + Math.abs(e.beta);
+                if (accel > 60) {
+                    energizeOrb();
                 }
             }
+        }
 
-            // Remove old orbs
-            otherOrbs = otherOrbs.filter(o => Date.now() - o.timestamp < 3000);
-
-            // Check if we should become dominant
-            if (orb.state === 'syncing' && !dominantOrb) {
-                checkDominance();
+        function handleMouseMove(e) {
+            if (typeof DeviceOrientationEvent === 'undefined' || !DeviceOrientationEvent.requestPermission) {
+                motion.gamma = (e.clientX / width - 0.5) * 60;
+                motion.beta = (e.clientY / height - 0.5) * 60;
             }
-        });
+        }
+
+        // ========== ENERGY FUNCTIONS ==========
+        function energizeOrb() {
+            motion.lastShake = Date.now();
+            orb.energy = Math.min(orb.maxEnergy, orb.energy + 20);
+            orb.magneticField.polarity *= -1; // Flip polarity
+            broadcastState();
+        }
+
+        // ========== TAB SYNCHRONIZATION ==========
+        const tabID = Math.random().toString(36).substr(2, 9);
+        let otherOrbs = [];
+        let connectionForce = 0;
+
+        // BroadcastChannel for cross-tab communication
+        const channel = new BroadcastChannel('quantum_orb');
+        channel.addEventListener('message', handleMessage);
 
         function broadcastState() {
             channel.postMessage({
                 id: tabID,
-                x: orb.x,
-                y: orb.y,
+                position: { 
+                    x: window.screenX + orb.position.x, 
+                    y: window.screenY + orb.position.y 
+                },
                 energy: orb.energy,
                 color: orb.color,
-                state: orb.state,
-                syncProgress: orb.syncProgress,
+                magneticField: orb.magneticField,
                 timestamp: Date.now()
             });
         }
 
-        // ====== AUTOMATIC SYNC & MERGE ======
-        function startSyncing() {
-            if (orb.state !== 'waiting') return;
-            
-            orb.state = 'syncing';
-            orb.syncProgress = 0;
-            updateStatus("Cosmic connection established!");
-            broadcastState();
-        }
-
-        function checkDominance() {
-            // The older tab becomes dominant
-            const oldestOrb = otherOrbs.reduce((oldest, o) => 
-                (!oldest || o.timestamp < oldest.timestamp) ? o : oldest, null);
-            
-            if (oldestOrb && oldestOrb.timestamp < Date.now() - 1000) {
-                dominantOrb = oldestOrb.id === tabID ? 'self' : 'other';
-                
-                if (dominantOrb === 'self') {
-                    orb.state = 'dominant';
-                    updateStatus("Absorbing cosmic energy...");
+        function handleMessage(e) {
+            if (e.data.id !== tabID) {
+                const existing = otherOrbs.find(o => o.id === e.data.id);
+                if (existing) {
+                    Object.assign(existing, e.data);
                 } else {
-                    orb.state = 'vanishing';
-                    updateStatus("Merging into the singularity...");
+                    otherOrbs.push(e.data);
                 }
-                broadcastState();
-            }
-        }
-
-        // ====== ANIMATION & EFFECTS ======
-        let particles = [];
-
-        function createParticles(count, hue) {
-            for (let i = 0; i < count; i++) {
-                particles.push({
-                    x: orb.x,
-                    y: orb.y,
-                    angle: Math.random() * Math.PI * 2,
-                    speed: 1 + Math.random() * 3,
-                    life: 1 + Math.random(),
-                    size: 1 + Math.random() * 3,
-                    hue: hue || orb.color.h
-                });
-            }
-        }
-
-        function updateParticles() {
-            particles.forEach(p => {
-                p.x += Math.cos(p.angle) * p.speed;
-                p.y += Math.sin(p.angle) * p.speed;
-                p.life -= 0.01;
-            });
-            particles = particles.filter(p => p.life > 0);
-        }
-
-        // ====== RENDERING ======
-        function update() {
-            orb.pulse += 0.01;
-
-            // Syncing animation
-            if (orb.state === 'syncing') {
-                orb.syncProgress = Math.min(1, orb.syncProgress + 0.005);
-                orb.energy = 30 + orb.syncProgress * 50;
-                orb.color.h = (orb.color.h + 0.2) % 360;
                 
-                if (Math.random() < 0.1) {
-                    createParticles(3);
-                }
+                // Remove old orbs
+                otherOrbs = otherOrbs.filter(o => Date.now() - o.timestamp < 2000);
+                
+                // Calculate magnetic interactions
+                calculateMagneticForces();
             }
-
-            // Dominant orb grows
-            if (orb.state === 'dominant') {
-                orb.energy = Math.min(150, orb.energy + 0.5);
-                if (Math.random() < 0.2) {
-                    createParticles(5, orb.color.h + 30);
-                }
-            }
-
-            // Vanishing orb fades
-            if (orb.state === 'vanishing') {
-                orb.energy = Math.max(0, orb.energy - 1);
-                if (orb.energy <= 0) {
-                    orb.state = 'hidden';
-                    updateStatus("Merged with the cosmos");
-                }
-            }
-
-            updateParticles();
-            broadcastState();
-            render();
-            requestAnimationFrame(update);
         }
 
-        function render() {
-            // Clear with fade
-            ctx.fillStyle = 'rgba(0, 0, 10, 0.1)';
-            ctx.fillRect(0, 0, width, height);
+        function calculateMagneticForces() {
+            connectionForce = 0;
+            
+            otherOrbs.forEach(other => {
+                // Calculate distance between orbs (in screen space)
+                const dx = other.position.x - (window.screenX + orb.position.x);
+                const dy = other.position.y - (window.screenY + orb.position.y);
+                const distance = Math.sqrt(dx * dx + dy * dy);
+                
+                // Magnetic force (attraction/repulsion based on polarity)
+                const forceDirection = orb.magneticField.polarity === other.magneticField.polarity ? -1 : 1;
+                const strength = (orb.energy * other.energy) / (distance * distance * 10000);
+                
+                // Apply force
+                if (distance < 1000) {
+                    orb.velocity.x += (dx / distance) * strength * forceDirection;
+                    orb.velocity.y += (dy / distance) * strength * forceDirection;
+                    connectionForce = Math.max(connectionForce, 1 - (distance / 800));
+                }
+            });
+        }
 
-            // Draw particles
-            particles.forEach(p => {
-                ctx.fillStyle = `hsla(${p.hue}, 100%, 70%, ${p.life})`;
+        // ========== PHYSICS UPDATE ==========
+        function updatePhysics() {
+            // Apply device tilt as acceleration
+            const tiltFactor = 0.02 * (1 + orb.energy / orb.maxEnergy);
+            orb.velocity.x += motion.gamma * tiltFactor;
+            orb.velocity.y += motion.beta * tiltFactor;
+            
+            // Apply friction (less friction when energized)
+            const friction = 0.95 - (orb.energy / orb.maxEnergy) * 0.1;
+            orb.velocity.x *= friction;
+            orb.velocity.y *= friction;
+            
+            // Update position with screen bounds
+            orb.position.x += orb.velocity.x;
+            orb.position.y += orb.velocity.y;
+            
+            // Screen boundary bounce
+            const bounce = 0.6;
+            if (orb.position.x < orb.radius) {
+                orb.position.x = orb.radius;
+                orb.velocity.x *= -bounce;
+            } else if (orb.position.x > width - orb.radius) {
+                orb.position.x = width - orb.radius;
+                orb.velocity.x *= -bounce;
+            }
+            
+            if (orb.position.y < orb.radius) {
+                orb.position.y = orb.radius;
+                orb.velocity.y *= -bounce;
+            } else if (orb.position.y > height - orb.radius) {
+                orb.position.y = height - orb.radius;
+                orb.velocity.y *= -bounce;
+            }
+            
+            // Update energy
+            orb.energy = Math.max(0, orb.energy - 0.2);
+            orb.magneticField.strength = orb.energy / orb.maxEnergy;
+            
+            // Update plasma nodes
+            orb.plasmaNodes.forEach(node => {
+                node.phase += node.speed * (1 + orb.energy / orb.maxEnergy);
+                node.energy = 0.5 + 0.5 * Math.sin(node.phase) * (0.3 + 0.7 * orb.magneticField.strength);
+            });
+            
+            // Periodically broadcast state
+            if (Date.now() - (orb.lastBroadcast || 0) > 300) {
+                broadcastState();
+                orb.lastBroadcast = Date.now();
+            }
+        }
+
+        // ========== RENDERING ==========
+        function render() {
+            // Clear with fade effect
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.1)';
+            ctx.fillRect(0, 0, width, height);
+            
+            // Draw orb
+            drawQuantumOrb();
+            
+            // Draw connections to other orbs
+            if (connectionForce > 0.1) {
+                drawMagneticConnections();
+            }
+        }
+
+        function drawQuantumOrb() {
+            ctx.save();
+            ctx.translate(orb.position.x, orb.position.y);
+            
+            // Outer glow
+            const gradient = ctx.createRadialGradient(
+                0, 0, orb.radius * 0.3,
+                0, 0, orb.radius * 1.5
+            );
+            gradient.addColorStop(0, `hsla(${orb.color.h}, ${orb.color.s}%, 70%, ${0.3 * orb.magneticField.strength})`);
+            gradient.addColorStop(1, 'hsla(0, 0%, 0%, 0)');
+            ctx.fillStyle = gradient;
+            ctx.beginPath();
+            ctx.arc(0, 0, orb.radius * 1.5, 0, Math.PI * 2);
+            ctx.fill();
+            
+            // Main orb body
+            ctx.beginPath();
+            ctx.arc(0, 0, orb.radius, 0, Math.PI * 2);
+            ctx.fillStyle = `hsla(${orb.color.h}, ${orb.color.s}%, ${orb.color.l}%, 0.9)`;
+            ctx.fill();
+            
+            // Plasma energy waves
+            orb.plasmaNodes.forEach(node => {
+                const x = Math.cos(node.angle) * orb.radius * node.radius;
+                const y = Math.sin(node.angle) * orb.radius * node.radius;
+                
+                const plasmaSize = orb.radius * 0.15 * node.energy;
+                const plasmaGradient = ctx.createRadialGradient(
+                    x, y, 0,
+                    x, y, plasmaSize
+                );
+                plasmaGradient.addColorStop(0, `hsla(${(orb.color.h + 30) % 360}, 100%, 80%, 0.8)`);
+                plasmaGradient.addColorStop(1, `hsla(${orb.color.h}, 100%, 60%, 0)`);
+                
+                ctx.fillStyle = plasmaGradient;
                 ctx.beginPath();
-                ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+                ctx.arc(x, y, plasmaSize, 0, Math.PI * 2);
                 ctx.fill();
             });
-
-            // Draw orb if visible
-            if (orb.state !== 'hidden') {
-                drawOrb();
-            }
-        }
-
-        function drawOrb() {
-            ctx.save();
-            ctx.translate(orb.x, orb.y);
-
-            // Outer glow
-            const glowSize = orb.radius * (1.3 + Math.sin(orb.pulse) * 0.2);
-            const glowGradient = ctx.createRadialGradient(
-                0, 0, orb.radius * 0.3,
-                0, 0, glowSize
+            
+            // Core energy
+            const coreGradient = ctx.createRadialGradient(
+                0, 0, 0,
+                0, 0, orb.radius * 0.5
             );
-            glowGradient.addColorStop(0, `hsla(${orb.color.h}, 100%, 70%, ${0.3 * orb.energy/orb.maxEnergy})`);
-            glowGradient.addColorStop(1, 'hsla(0, 0%, 0%, 0)');
+            coreGradient.addColorStop(0, `hsla(${orb.color.h}, 100%, 90%, 0.9)`);
+            coreGradient.addColorStop(1, `hsla(${orb.color.h}, 100%, 70%, 0.2)`);
             
-            ctx.fillStyle = glowGradient;
+            ctx.fillStyle = coreGradient;
             ctx.beginPath();
-            ctx.arc(0, 0, glowSize, 0, Math.PI * 2);
+            ctx.arc(0, 0, orb.radius * 0.5, 0, Math.PI * 2);
             ctx.fill();
-
-            // Main orb
-            const currentRadius = orb.radius * (orb.state === 'vanishing' ? 
-                (orb.energy / orb.maxEnergy) : 1);
             
-            ctx.beginPath();
-            ctx.arc(0, 0, currentRadius, 0, Math.PI * 2);
-            
-            const bodyGradient = ctx.createRadialGradient(
-                0, 0, currentRadius * 0.3,
-                0, 0, currentRadius
-            );
-            bodyGradient.addColorStop(0, `hsla(${orb.color.h}, 100%, 80%, 0.9)`);
-            bodyGradient.addColorStop(1, `hsla(${orb.color.h}, 100%, 60%, 0.7)`);
-            
-            ctx.fillStyle = bodyGradient;
-            ctx.fill();
-
-            // Core pulse
-            const coreSize = currentRadius * 0.4 * (1 + Math.sin(orb.pulse * 3) * 0.1);
-            ctx.fillStyle = `hsla(${orb.color.h}, 100%, 90%, ${0.5 + Math.sin(orb.pulse) * 0.3})`;
-            ctx.beginPath();
-            ctx.arc(0, 0, coreSize, 0, Math.PI * 2);
-            ctx.fill();
-
             ctx.restore();
         }
 
-        function updateStatus(text) {
-            document.getElementById('statusMessage').textContent = text;
+        function drawMagneticConnections() {
+            otherOrbs.forEach(other => {
+                const dx = other.position.x - (window.screenX + orb.position.x);
+                const dy = other.position.y - (window.screenY + orb.position.y);
+                const distance = Math.sqrt(dx * dx + dy * dy);
+                
+                if (distance < 800) {
+                    const opacity = Math.min(0.8, (1 - distance/800) * connectionForce);
+                    ctx.strokeStyle = `hsla(${orb.color.h}, 100%, 70%, ${opacity})`;
+                    ctx.lineWidth = 2 + 3 * connectionForce;
+                    ctx.beginPath();
+                    ctx.moveTo(orb.position.x, orb.position.y);
+                    ctx.lineTo(
+                        orb.position.x + dx * 0.9,
+                        orb.position.y + dy * 0.9
+                    );
+                    ctx.stroke();
+                    
+                    // Draw field lines
+                    if (connectionForce > 0.5) {
+                        drawFieldLines(orb.position.x, orb.position.y, 
+                                      orb.position.x + dx, orb.position.y + dy);
+                    }
+                }
+            });
         }
 
-        // Start the experience
-        broadcastState();
-        update();
+        function drawFieldLines(x1, y1, x2, y2) {
+            const segments = 8;
+            const curve = 50 * connectionForce;
+            
+            ctx.strokeStyle = `hsla(${orb.color.h}, 100%, 80%, ${connectionForce * 0.3})`;
+            ctx.lineWidth = 1;
+            
+            for (let i = 0; i < 3; i++) {
+                ctx.beginPath();
+                ctx.moveTo(x1, y1);
+                
+                for (let s = 1; s <= segments; s++) {
+                    const t = s / segments;
+                    const cx = x1 + (x2 - x1) * t;
+                    const cy = y1 + (y2 - y1) * t + 
+                              Math.sin(t * Math.PI) * curve * (i - 1);
+                    ctx.lineTo(cx, cy);
+                }
+                
+                ctx.stroke();
+            }
+        }
+
+        // ========== ANIMATION LOOP ==========
+        function animate() {
+            updatePhysics();
+            render();
+            requestAnimationFrame(animate);
+        }
 
         // Handle resize
         window.addEventListener('resize', () => {
@@ -272,10 +368,27 @@
             height = window.innerHeight;
             canvas.width = width;
             canvas.height = height;
-            orb.x = width / 2;
-            orb.y = height / 2;
+            orb.position.x = width / 2;
+            orb.position.y = height / 2;
             orb.radius = Math.min(width, height) * 0.25;
         });
+
+        // iOS permission handling
+        if (typeof DeviceOrientationEvent !== 'undefined' && 
+            typeof DeviceOrientationEvent.requestPermission === 'function') {
+            document.body.addEventListener('click', () => {
+                DeviceOrientationEvent.requestPermission()
+                    .then(response => {
+                        if (response === 'granted') {
+                            window.addEventListener('deviceorientation', handleOrientation);
+                        }
+                    })
+                    .catch(console.error);
+            }, { once: true });
+        }
+
+        // Start animation
+        animate();
     </script>
 </body>
 </html>
