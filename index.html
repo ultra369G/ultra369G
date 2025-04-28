@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Quantum Energy Orb</title>
+    <title>Cosmic Orb Fusion</title>
     <style>
         body {
             margin: 0;
@@ -13,31 +13,76 @@
             justify-content: center;
             align-items: center;
             height: 100vh;
-            touch-action: none;
+            font-family: Arial, sans-serif;
+            touch-action: pan-y;
         }
         canvas {
             display: block;
         }
-        .instructions {
+        #status {
             position: absolute;
             bottom: 20px;
-            color: rgba(255,255,255,0.7);
-            font-family: Arial, sans-serif;
+            color: rgba(255,255,255,0.9);
             text-align: center;
             width: 100%;
-            pointer-events: none;
+            text-shadow: 0 0 10px #000;
+            font-size: 1.2em;
             z-index: 100;
+        }
+        #compass {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            width: 60px;
+            height: 60px;
+            background: rgba(0,0,0,0.5);
+            border-radius: 50%;
+            display: none;
+            justify-content: center;
+            align-items: center;
+            color: white;
+            font-size: 24px;
+        }
+        #swipe-hint {
+            position: absolute;
+            top: 50%;
+            width: 100%;
+            text-align: center;
+            color: rgba(255,255,255,0.7);
+            font-size: 1.5em;
+            display: none;
+        }
+        #connection-status {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            width: 15px;
+            height: 15px;
+            border-radius: 50%;
+            background: #f00;
+        }
+        #device-list {
+            position: absolute;
+            top: 30px;
+            left: 10px;
+            color: white;
+            background: rgba(0,0,0,0.7);
+            padding: 5px;
+            border-radius: 5px;
+            font-size: 12px;
         }
     </style>
 </head>
 <body>
     <canvas id="orbCanvas"></canvas>
-    <div class="instructions">
-        Tilt device to move | Shake/click to energize | Open multiple tabs for magnetic interaction
-    </div>
+    <div id="status">🌀 Initializing cosmic connection...</div>
+    <div id="compass">↑</div>
+    <div id="swipe-hint">Swipe to teleport orb</div>
+    <div id="connection-status" title="Disconnected"></div>
+    <div id="device-list">Connected devices: 1</div>
 
     <script>
-        // ========== SETUP ==========
+        // ====== CORE SETUP ======
         const canvas = document.getElementById('orbCanvas');
         const ctx = canvas.getContext('2d');
         let width = window.innerWidth;
@@ -45,350 +90,716 @@
         canvas.width = width;
         canvas.height = height;
 
-        // ========== QUANTUM ORB PHYSICS ==========
-        const orb = {
-            position: { x: width/2, y: height/2 },
-            velocity: { x: 0, y: 0 },
-            radius: Math.min(width, height) * 0.25,
-            mass: 1,
-            
-            // Energy properties
-            energy: 0,
-            maxEnergy: 100,
-            plasmaNodes: [],
-            color: { h: 180, s: 100, l: 50 },
-            
-            // Magnetic field
-            magneticField: {
-                strength: 0,
-                polarity: 1
-            }
-        };
+        // ====== COMMUNICATION SYSTEM ======
+        const CHANNEL_NAME = 'cosmic_orb_final_working';
+        let connectionChannel;
+        let otherOrbs = [];
+        let lastBroadcastTime = 0;
+        const BROADCAST_INTERVAL = 1000; // ms
 
-        // Create plasma nodes for internal energy waves
-        function initPlasmaNodes() {
-            const nodeCount = 36;
-            for (let i = 0; i < nodeCount; i++) {
-                const angle = (i / nodeCount) * Math.PI * 2;
-                orb.plasmaNodes.push({
-                    angle: angle,
-                    radius: 0.7 + Math.random() * 0.3,
-                    energy: Math.random(),
-                    speed: 0.02 + Math.random() * 0.03,
-                    phase: Math.random() * Math.PI * 2
-                });
+        // Initialize communication channel
+        function setupConnection() {
+            try {
+                // Try BroadcastChannel first (works in Chrome, Firefox, Edge)
+                if (typeof BroadcastChannel !== 'undefined') {
+                    connectionChannel = new BroadcastChannel(CHANNEL_NAME);
+                    connectionChannel.onmessage = handleIncomingMessage;
+                    console.log("Using BroadcastChannel for communication");
+                }
+                
+                // Fallback to localStorage events (works in Safari)
+                window.addEventListener('storage', storageEventHandler);
+                
+                // Start regular broadcasting
+                setInterval(broadcastState, BROADCAST_INTERVAL);
+                broadcastState();
+                
+                document.getElementById('connection-status').style.background = '#0f0';
+                document.getElementById('connection-status').title = 'Connected';
+                updateStatus("🌌 Connected to cosmic network");
+            } catch (e) {
+                console.error("Connection setup failed:", e);
+                document.getElementById('connection-status').style.background = '#f00';
+                document.getElementById('connection-status').title = 'Connection failed';
+                updateStatus("⚠️ Using limited connection");
             }
         }
-        initPlasmaNodes();
 
-        // ========== DEVICE MOTION ==========
-        const motion = {
-            gamma: 0,
-            beta: 0,
-            lastShake: 0
-        };
-
-        window.addEventListener('deviceorientation', handleOrientation);
-        window.addEventListener('mousemove', handleMouseMove);
-        window.addEventListener('click', energizeOrb);
-
-        function handleOrientation(e) {
-            motion.gamma = e.gamma || 0;
-            motion.beta = e.beta || 0;
-            
-            // Detect shake
-            if (Date.now() - motion.lastShake > 1000) {
-                const accel = Math.abs(e.gamma) + Math.abs(e.beta);
-                if (accel > 60) {
-                    energizeOrb();
+        function storageEventHandler(e) {
+            if (e.key === CHANNEL_NAME && e.newValue) {
+                try {
+                    const data = JSON.parse(e.newValue);
+                    if (data && data.id) {
+                        handleIncomingMessage({data: data});
+                    }
+                } catch (parseErr) {
+                    console.error("Storage parse error:", parseErr);
                 }
             }
         }
 
-        function handleMouseMove(e) {
-            if (typeof DeviceOrientationEvent === 'undefined' || !DeviceOrientationEvent.requestPermission) {
-                motion.gamma = (e.clientX / width - 0.5) * 60;
-                motion.beta = (e.clientY / height - 0.5) * 60;
+        function handleIncomingMessage(event) {
+            try {
+                const data = event.data || (typeof event === 'object' ? event : null);
+                if (!data || !data.id || data.id === orb.id) return;
+                
+                // Update screen position
+                orb.screenX = window.screenX;
+                orb.screenY = window.screenY;
+                
+                // Special message types
+                if (data.type === 'teleport' && data.targetId === orb.id) {
+                    receiveTeleport(data);
+                    return;
+                }
+                if (data.type === 'goodbye') {
+                    otherOrbs = otherOrbs.filter(o => o.id !== data.id);
+                    updateDeviceList();
+                    return;
+                }
+                
+                // Update existing or add new orb
+                const existingIndex = otherOrbs.findIndex(o => o.id === data.id);
+                if (existingIndex >= 0) {
+                    otherOrbs[existingIndex] = data;
+                } else {
+                    otherOrbs.push(data);
+                    if (orb.state === 'waiting') {
+                        startConnection();
+                    }
+                }
+                
+                // Remove old orbs (>3 seconds since last update)
+                otherOrbs = otherOrbs.filter(o => Date.now() - (o.timestamp || 0) < 3000);
+                
+                // Update device list
+                updateDeviceList();
+                
+                // State machine updates
+                if (orb.state === 'connecting') checkMerge();
+                if (orb.state === 'attracting') updateAttraction();
+                if (orb.state === 'merging') updateMerge();
+                if (orb.state === 'teleporting') updateTeleport();
+            } catch (e) {
+                console.error("Message handling error:", e);
             }
         }
 
-        // ========== ENERGY FUNCTIONS ==========
-        function energizeOrb() {
-            motion.lastShake = Date.now();
-            orb.energy = Math.min(orb.maxEnergy, orb.energy + 20);
-            orb.magneticField.polarity *= -1; // Flip polarity
+        function broadcastState() {
+            const now = Date.now();
+            if (now - lastBroadcastTime < BROADCAST_INTERVAL - 200) return;
+            lastBroadcastTime = now;
+            
+            const message = {
+                id: orb.id,
+                x: orb.x,
+                y: orb.y,
+                radius: orb.radius,
+                energy: orb.energy,
+                color: orb.color,
+                state: orb.state,
+                mergeProgress: orb.mergeProgress,
+                teleportProgress: orb.teleportProgress,
+                birthTime: orb.birthTime,
+                screenX: window.screenX,
+                screenY: window.screenY,
+                screenWidth: window.screen.width,
+                screenHeight: window.screen.height,
+                isSupreme: orb.isSupreme,
+                mergedOrbs: orb.mergedOrbs,
+                deviceType: orb.deviceType,
+                timestamp: Date.now()
+            };
+            
+            try {
+                // Try BroadcastChannel first
+                if (connectionChannel) {
+                    connectionChannel.postMessage(message);
+                }
+                // Fallback to localStorage
+                localStorage.setItem(CHANNEL_NAME, JSON.stringify(message));
+                localStorage.removeItem(CHANNEL_NAME);
+            } catch (e) {
+                console.error("Broadcast failed:", e);
+            }
+        }
+
+        function updateDeviceList() {
+            const activeDevices = otherOrbs.filter(o => 
+                Date.now() - (o.timestamp || 0) < 3000
+            ).length + 1;
+            document.getElementById('device-list').textContent = 
+                `Connected devices: ${activeDevices}`;
+        }
+
+        // ====== COSMIC ORB ======
+        const orb = {
+            x: width/2,
+            y: height/2,
+            radius: Math.min(width, height) * 0.2,
+            energy: 50,
+            color: { h: Math.random() * 360, s: 100, l: 60 },
+            pulse: 0,
+            state: 'waiting',
+            mergeProgress: 0,
+            teleportProgress: 0,
+            birthTime: Date.now(),
+            id: generateDeviceId(),
+            screenX: window.screenX,
+            screenY: window.screenY,
+            screenWidth: window.screen.width,
+            screenHeight: window.screen.height,
+            isSupreme: false,
+            mergedOrbs: 0,
+            deviceType: getDeviceType()
+        };
+
+        function generateDeviceId() {
+            const storageKey = 'cosmic_orb_device_id_v2';
+            let id = localStorage.getItem(storageKey);
+            if (!id) {
+                id = 'orb_' + Math.random().toString(36).substr(2, 9) + 
+                     '_' + Date.now().toString(36);
+                localStorage.setItem(storageKey, id);
+            }
+            return id;
+        }
+
+        function getDeviceType() {
+            const ua = navigator.userAgent;
+            if (/Mobile|Android|iPhone|iPad|iPod/i.test(ua)) return 'Mobile';
+            if (/Windows/i.test(ua)) return 'Windows PC';
+            if (/Macintosh|Mac OS X/i.test(ua)) return 'Mac';
+            return 'Unknown';
+        }
+
+        // ====== ORB INTERACTION ======
+        let touchStartX = 0;
+        let touchStartY = 0;
+        const swipeThreshold = 50;
+
+        canvas.addEventListener('touchstart', (e) => {
+            if (orb.state !== 'supreme') return;
+            touchStartX = e.touches[0].clientX;
+            touchStartY = e.touches[0].clientY;
+            document.getElementById('swipe-hint').style.display = 'block';
+        });
+
+        canvas.addEventListener('touchend', (e) => {
+            if (orb.state !== 'supreme') return;
+            document.getElementById('swipe-hint').style.display = 'none';
+            
+            const touchEndX = e.changedTouches[0].clientX;
+            const touchEndY = e.changedTouches[0].clientY;
+            const dx = touchEndX - touchStartX;
+            const dy = touchEndY - touchStartY;
+            
+            if (Math.abs(dx) > swipeThreshold || Math.abs(dy) > swipeThreshold) {
+                handleSwipe(dx, dy);
+            }
+        });
+
+        function handleSwipe(dx, dy) {
+            const availableOrbs = otherOrbs.filter(o => 
+                o.state !== 'teleporting' && o.id !== orb.id
+            );
+            
+            if (availableOrbs.length === 0) {
+                updateStatus("⚠️ No other devices detected");
+                return;
+            }
+            
+            const swipeAngle = Math.atan2(dy, dx);
+            const centerX = orb.screenX + orb.x;
+            const centerY = orb.screenY + orb.y;
+            
+            const targetOrb = availableOrbs.reduce((nearest, o) => {
+                const targetCenterX = o.screenX + o.x;
+                const targetCenterY = o.screenY + o.y;
+                
+                const angleToTarget = Math.atan2(
+                    targetCenterY - centerY,
+                    targetCenterX - centerX
+                );
+                
+                const angleDiff = Math.abs(swipeAngle - angleToTarget);
+                const distance = Math.sqrt(
+                    Math.pow(targetCenterX - centerX, 2) + 
+                    Math.pow(targetCenterY - centerY, 2)
+                );
+                
+                const score = angleDiff * (distance / 1000);
+                
+                return score < nearest.score ? 
+                    { orb: o, score: score } : nearest;
+            }, { orb: availableOrbs[0], score: Infinity }).orb;
+            
+            initiateTeleport(targetOrb);
+        }
+
+        // ====== ORB STATES ======
+        function startConnection() {
+            orb.state = 'connecting';
+            updateStatus("⚡ Detected cosmic orbs...");
+            document.getElementById('compass').style.display = 'flex';
             broadcastState();
         }
 
-        // ========== TAB SYNCHRONIZATION ==========
-        const tabID = Math.random().toString(36).substr(2, 9);
-        let otherOrbs = [];
-        let connectionForce = 0;
-
-        // BroadcastChannel for cross-tab communication
-        const channel = new BroadcastChannel('quantum_orb');
-        channel.addEventListener('message', handleMessage);
-
-        function broadcastState() {
-            channel.postMessage({
-                id: tabID,
-                position: { 
-                    x: window.screenX + orb.position.x, 
-                    y: window.screenY + orb.position.y 
-                },
-                energy: orb.energy,
-                color: orb.color,
-                magneticField: orb.magneticField,
-                timestamp: Date.now()
-            });
+        function checkMerge() {
+            const allOrbs = [...otherOrbs, orb];
+            const oldestOrb = allOrbs.reduce((oldest, o) => 
+                o.birthTime < oldest.birthTime ? o : oldest);
+            
+            if (oldestOrb.id === orb.id) {
+                orb.state = 'attracting';
+                orb.isSupreme = true;
+                updateStatus("🌀 Drawing in cosmic energy...");
+            } else {
+                orb.state = 'attracting';
+                orb.targetOrb = oldestOrb;
+                updateStatus(`🌀 Being drawn to ${oldestOrb.deviceType || 'another device'}...`);
+            }
+            broadcastState();
         }
 
-        function handleMessage(e) {
-            if (e.data.id !== tabID) {
-                const existing = otherOrbs.find(o => o.id === e.data.id);
-                if (existing) {
-                    Object.assign(existing, e.data);
-                } else {
-                    otherOrbs.push(e.data);
+        function updateAttraction() {
+            if (orb.isSupreme) {
+                let mergingCount = 0;
+                let totalHue = orb.color.h;
+                
+                otherOrbs.forEach(o => {
+                    if (o.state === 'attracting' && o.targetOrb?.id === orb.id) {
+                        mergingCount++;
+                        totalHue += o.color.h;
+                        
+                        const direction = Math.atan2(
+                            (o.screenY + o.y) - (orb.screenY + orb.y),
+                            (o.screenX + o.x) - (orb.screenX + orb.x)
+                        );
+                        
+                        createEnergyBeam(
+                            orb.x, orb.y,
+                            o.x + (o.screenX - orb.screenX),
+                            o.y + (o.screenY - orb.screenY),
+                            o.color.h
+                        );
+                    }
+                });
+                
+                orb.color.h = (totalHue / (mergingCount + 1)) % 360;
+                orb.mergedOrbs = mergingCount;
+                orb.energy = 50 + (mergingCount * 20);
+                
+                if (mergingCount > 0 && orb.state !== 'merging') {
+                    orb.state = 'merging';
+                    updateStatus("💫 Merging cosmic energies...");
                 }
-                
-                // Remove old orbs
-                otherOrbs = otherOrbs.filter(o => Date.now() - o.timestamp < 2000);
-                
-                // Calculate magnetic interactions
-                calculateMagneticForces();
-            }
-        }
-
-        function calculateMagneticForces() {
-            connectionForce = 0;
-            
-            otherOrbs.forEach(other => {
-                // Calculate distance between orbs (in screen space)
-                const dx = other.position.x - (window.screenX + orb.position.x);
-                const dy = other.position.y - (window.screenY + orb.position.y);
-                const distance = Math.sqrt(dx * dx + dy * dy);
-                
-                // Magnetic force (attraction/repulsion based on polarity)
-                const forceDirection = orb.magneticField.polarity === other.magneticField.polarity ? -1 : 1;
-                const strength = (orb.energy * other.energy) / (distance * distance * 10000);
-                
-                // Apply force
-                if (distance < 1000) {
-                    orb.velocity.x += (dx / distance) * strength * forceDirection;
-                    orb.velocity.y += (dy / distance) * strength * forceDirection;
-                    connectionForce = Math.max(connectionForce, 1 - (distance / 800));
-                }
-            });
-        }
-
-        // ========== PHYSICS UPDATE ==========
-        function updatePhysics() {
-            // Apply device tilt as acceleration
-            const tiltFactor = 0.02 * (1 + orb.energy / orb.maxEnergy);
-            orb.velocity.x += motion.gamma * tiltFactor;
-            orb.velocity.y += motion.beta * tiltFactor;
-            
-            // Apply friction (less friction when energized)
-            const friction = 0.95 - (orb.energy / orb.maxEnergy) * 0.1;
-            orb.velocity.x *= friction;
-            orb.velocity.y *= friction;
-            
-            // Update position with screen bounds
-            orb.position.x += orb.velocity.x;
-            orb.position.y += orb.velocity.y;
-            
-            // Screen boundary bounce
-            const bounce = 0.6;
-            if (orb.position.x < orb.radius) {
-                orb.position.x = orb.radius;
-                orb.velocity.x *= -bounce;
-            } else if (orb.position.x > width - orb.radius) {
-                orb.position.x = width - orb.radius;
-                orb.velocity.x *= -bounce;
-            }
-            
-            if (orb.position.y < orb.radius) {
-                orb.position.y = orb.radius;
-                orb.velocity.y *= -bounce;
-            } else if (orb.position.y > height - orb.radius) {
-                orb.position.y = height - orb.radius;
-                orb.velocity.y *= -bounce;
-            }
-            
-            // Update energy
-            orb.energy = Math.max(0, orb.energy - 0.2);
-            orb.magneticField.strength = orb.energy / orb.maxEnergy;
-            
-            // Update plasma nodes
-            orb.plasmaNodes.forEach(node => {
-                node.phase += node.speed * (1 + orb.energy / orb.maxEnergy);
-                node.energy = 0.5 + 0.5 * Math.sin(node.phase) * (0.3 + 0.7 * orb.magneticField.strength);
-            });
-            
-            // Periodically broadcast state
-            if (Date.now() - (orb.lastBroadcast || 0) > 300) {
-                broadcastState();
-                orb.lastBroadcast = Date.now();
-            }
-        }
-
-        // ========== RENDERING ==========
-        function render() {
-            // Clear with fade effect
-            ctx.fillStyle = 'rgba(0, 0, 0, 0.1)';
-            ctx.fillRect(0, 0, width, height);
-            
-            // Draw orb
-            drawQuantumOrb();
-            
-            // Draw connections to other orbs
-            if (connectionForce > 0.1) {
-                drawMagneticConnections();
-            }
-        }
-
-        function drawQuantumOrb() {
-            ctx.save();
-            ctx.translate(orb.position.x, orb.position.y);
-            
-            // Outer glow
-            const gradient = ctx.createRadialGradient(
-                0, 0, orb.radius * 0.3,
-                0, 0, orb.radius * 1.5
-            );
-            gradient.addColorStop(0, `hsla(${orb.color.h}, ${orb.color.s}%, 70%, ${0.3 * orb.magneticField.strength})`);
-            gradient.addColorStop(1, 'hsla(0, 0%, 0%, 0)');
-            ctx.fillStyle = gradient;
-            ctx.beginPath();
-            ctx.arc(0, 0, orb.radius * 1.5, 0, Math.PI * 2);
-            ctx.fill();
-            
-            // Main orb body
-            ctx.beginPath();
-            ctx.arc(0, 0, orb.radius, 0, Math.PI * 2);
-            ctx.fillStyle = `hsla(${orb.color.h}, ${orb.color.s}%, ${orb.color.l}%, 0.9)`;
-            ctx.fill();
-            
-            // Plasma energy waves
-            orb.plasmaNodes.forEach(node => {
-                const x = Math.cos(node.angle) * orb.radius * node.radius;
-                const y = Math.sin(node.angle) * orb.radius * node.radius;
-                
-                const plasmaSize = orb.radius * 0.15 * node.energy;
-                const plasmaGradient = ctx.createRadialGradient(
-                    x, y, 0,
-                    x, y, plasmaSize
+            } else if (orb.targetOrb) {
+                const direction = Math.atan2(
+                    (orb.targetOrb.screenY + orb.targetOrb.y) - (orb.screenY + orb.y),
+                    (orb.targetOrb.screenX + orb.targetOrb.x) - (orb.screenX + orb.x)
                 );
-                plasmaGradient.addColorStop(0, `hsla(${(orb.color.h + 30) % 360}, 100%, 80%, 0.8)`);
-                plasmaGradient.addColorStop(1, `hsla(${orb.color.h}, 100%, 60%, 0)`);
                 
-                ctx.fillStyle = plasmaGradient;
+                updateCompass(direction);
+                
+                const distance = Math.sqrt(
+                    Math.pow((orb.targetOrb.screenX + orb.targetOrb.x) - (orb.screenX + orb.x), 2) +
+                    Math.pow((orb.targetOrb.screenY + orb.targetOrb.y) - (orb.screenY + orb.y), 2)
+                );
+                
+                const force = Math.min(15, 5000/(distance));
+                orb.x += Math.cos(direction) * force;
+                orb.y += Math.sin(direction) * force;
+                
+                if (distance < 50) {
+                    orb.state = 'merging';
+                    updateStatus("💥 Cosmic fusion initiated!");
+                }
+            }
+            broadcastState();
+        }
+
+        function updateMerge() {
+            orb.mergeProgress = Math.min(1, orb.mergeProgress + 0.01);
+            
+            if (orb.isSupreme) {
+                orb.energy = 100 + (orb.mergedOrbs * 30) + (50 * orb.mergeProgress);
+                
+                if (orb.mergeProgress >= 1) {
+                    updateStatus(`🌟 SUPREME ORB (${orb.mergedOrbs+1} merged) - Swipe to teleport`);
+                    document.getElementById('swipe-hint').style.display = 'block';
+                    createShockwave(orb.x, orb.y);
+                    createParticles(orb.x, orb.y, 100, orb.color.h, 3);
+                }
+            } else {
+                orb.energy = Math.max(0, orb.energy - 1);
+                
+                if (orb.mergeProgress >= 1) {
+                    orb.state = 'waiting';
+                    orb.mergeProgress = 0;
+                    orb.energy = 50;
+                    updateStatus("🌀 Merged with supreme orb");
+                    document.getElementById('compass').style.display = 'none';
+                }
+            }
+            broadcastState();
+        }
+
+        function initiateTeleport(targetOrb) {
+            orb.state = 'teleporting';
+            orb.targetOrb = targetOrb;
+            orb.teleportProgress = 0;
+            updateStatus(`🌀 Teleporting to ${targetOrb.deviceType || 'device'}...`);
+            document.getElementById('compass').style.display = 'none';
+            broadcastState();
+        }
+
+        function updateTeleport() {
+            orb.teleportProgress = Math.min(1, orb.teleportProgress + 0.05);
+            
+            if (orb.teleportProgress >= 1) {
+                sendTeleport(orb.targetOrb.id);
+                orb.state = 'waiting';
+                orb.teleportProgress = 0;
+                orb.isSupreme = false;
+                orb.energy = 50;
+                orb.mergedOrbs = 0;
+                updateStatus("🌀 Orb teleported away");
+                document.getElementById('swipe-hint').style.display = 'none';
+            }
+            broadcastState();
+        }
+
+        function sendTeleport(targetId) {
+            const message = {
+                type: 'teleport',
+                id: orb.id,
+                targetId: targetId,
+                color: orb.color,
+                energy: orb.energy,
+                mergedOrbs: orb.mergedOrbs,
+                deviceType: orb.deviceType,
+                timestamp: Date.now()
+            };
+            
+            try {
+                if (connectionChannel) {
+                    connectionChannel.postMessage(message);
+                }
+                localStorage.setItem(CHANNEL_NAME, JSON.stringify(message));
+                localStorage.removeItem(CHANNEL_NAME);
+            } catch (e) {
+                console.error("Teleport send failed:", e);
+            }
+        }
+
+        function receiveTeleport(teleportData) {
+            orb.state = 'supreme';
+            orb.color = teleportData.color;
+            orb.energy = teleportData.energy;
+            orb.mergedOrbs = teleportData.mergedOrbs;
+            orb.isSupreme = true;
+            updateStatus(`🌟 Supreme orb (${orb.mergedOrbs+1} merged) - Swipe to teleport`);
+            document.getElementById('compass').style.display = 'flex';
+            document.getElementById('swipe-hint').style.display = 'block';
+            createParticles(orb.x, orb.y, 50, orb.color.h, 3);
+            createShockwave(orb.x, orb.y);
+            broadcastState();
+        }
+
+        function updateCompass(angle) {
+            const compass = document.getElementById('compass');
+            const directions = ['↑', '↗', '→', '↘', '↓', '↙', '←', '↖'];
+            const index = Math.round((angle + Math.PI) / (Math.PI/4)) % 8;
+            compass.textContent = directions[index];
+            compass.style.transform = `rotate(${angle}rad)`;
+        }
+
+        // ====== VISUAL EFFECTS ======
+        let particles = [];
+        let shockwaves = [];
+        let energyBeams = [];
+
+        function createParticles(x, y, count, hue, speedMultiplier = 1) {
+            for (let i = 0; i < count; i++) {
+                particles.push({
+                    x: x,
+                    y: y,
+                    angle: Math.random() * Math.PI * 2,
+                    speed: (1 + Math.random() * 3) * speedMultiplier,
+                    life: 0.5 + Math.random(),
+                    size: 1 + Math.random() * 3,
+                    hue: hue || orb.color.h
+                });
+            }
+        }
+
+        function createShockwave(x, y, hue) {
+            shockwaves.push({
+                x: x,
+                y: y,
+                size: 10,
+                growth: 30,
+                life: 1,
+                hue: hue || orb.color.h
+            });
+        }
+
+        function createEnergyBeam(x1, y1, x2, y2, hue) {
+            energyBeams.push({
+                x1: x1,
+                y1: y1,
+                x2: x2,
+                y2: y2,
+                life: 1,
+                hue: hue || orb.color.h
+            });
+        }
+
+        function updateEffects() {
+            if (orb.state === 'connecting' && Math.random() < 0.2) {
+                createParticles(orb.x, orb.y, 3);
+            }
+            if (orb.state === 'attracting' && Math.random() < 0.3) {
+                createParticles(orb.x, orb.y, 2, orb.color.h, 2);
+            }
+            if (orb.state === 'merging' && Math.random() < 0.5) {
+                createParticles(orb.x, orb.y, 5, (orb.color.h + 30) % 360, 2);
+            }
+            if (orb.state === 'supreme' && Math.random() < 0.1) {
+                createParticles(orb.x, orb.y, 2, (orb.color.h + 15) % 360);
+            }
+            if (orb.state === 'teleporting' && Math.random() < 0.8) {
+                createParticles(orb.x, orb.y, 3, orb.color.h, 4);
+            }
+            
+            particles.forEach(p => {
+                p.x += Math.cos(p.angle) * p.speed;
+                p.y += Math.sin(p.angle) * p.speed;
+                p.life -= 0.01;
+            });
+            particles = particles.filter(p => p.life > 0);
+            
+            shockwaves.forEach(s => {
+                s.size += s.growth;
+                s.life -= 0.02;
+            });
+            shockwaves = shockwaves.filter(s => s.life > 0);
+            
+            energyBeams.forEach(b => {
+                b.life -= 0.03;
+            });
+            energyBeams = energyBeams.filter(b => b.life > 0);
+        }
+
+        // ====== RENDERING ======
+        function render() {
+            ctx.fillStyle = 'rgba(0, 0, 20, 0.2)';
+            ctx.fillRect(0, 0, width, height);
+            drawStarfield();
+            
+            energyBeams.forEach(b => {
+                const alpha = b.life * 0.7;
+                ctx.strokeStyle = `hsla(${b.hue}, 100%, 70%, ${alpha})`;
+                ctx.lineWidth = 2 + (1-b.life) * 5;
                 ctx.beginPath();
-                ctx.arc(x, y, plasmaSize, 0, Math.PI * 2);
+                ctx.moveTo(b.x1, b.y1);
+                ctx.lineTo(b.x2, b.y2);
+                ctx.stroke();
+                
+                const gradient = ctx.createLinearGradient(b.x1, b.y1, b.x2, b.y2);
+                gradient.addColorStop(0, `hsla(${b.hue}, 100%, 70%, ${alpha*0.3})`);
+                gradient.addColorStop(1, `hsla(${b.hue}, 100%, 50%, 0)`);
+                
+                ctx.strokeStyle = gradient;
+                ctx.lineWidth = 10 + (1-b.life) * 20;
+                ctx.beginPath();
+                ctx.moveTo(b.x1, b.y1);
+                ctx.lineTo(b.x2, b.y2);
+                ctx.stroke();
+            });
+            
+            shockwaves.forEach(s => {
+                const gradient = ctx.createRadialGradient(
+                    s.x, s.y, 0,
+                    s.x, s.y, s.size
+                );
+                gradient.addColorStop(0, `hsla(${s.hue}, 100%, 70%, ${s.life*0.5})`);
+                gradient.addColorStop(1, 'hsla(0, 0%, 0%, 0)');
+                
+                ctx.fillStyle = gradient;
+                ctx.beginPath();
+                ctx.arc(s.x, s.y, s.size, 0, Math.PI * 2);
                 ctx.fill();
             });
             
-            // Core energy
-            const coreGradient = ctx.createRadialGradient(
-                0, 0, 0,
-                0, 0, orb.radius * 0.5
-            );
-            coreGradient.addColorStop(0, `hsla(${orb.color.h}, 100%, 90%, 0.9)`);
-            coreGradient.addColorStop(1, `hsla(${orb.color.h}, 100%, 70%, 0.2)`);
+            particles.forEach(p => {
+                ctx.fillStyle = `hsla(${p.hue}, 100%, 70%, ${p.life})`;
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, p.size * p.life, 0, Math.PI * 2);
+                ctx.fill();
+            });
             
-            ctx.fillStyle = coreGradient;
+            if (orb.state !== 'teleporting' || orb.teleportProgress < 0.9) {
+                drawOrb();
+            }
+        }
+
+        function drawStarfield() {
+            ctx.fillStyle = 'white';
+            for (let i = 0; i < 200; i++) {
+                const x = Math.random() * width;
+                const y = Math.random() * height;
+                const size = Math.random() * 1.5;
+                const alpha = 0.1 + Math.random() * 0.3;
+                ctx.globalAlpha = alpha;
+                ctx.beginPath();
+                ctx.arc(x, y, size, 0, Math.PI * 2);
+                ctx.fill();
+            }
+            ctx.globalAlpha = 1;
+        }
+
+        function drawOrb() {
+            ctx.save();
+            ctx.translate(orb.x, orb.y);
+            
+            if (orb.state === 'merging' || orb.state === 'teleporting') {
+                ctx.beginPath();
+                for (let i = 0; i < 64; i++) {
+                    const angle = (i/64) * Math.PI * 2;
+                    const radius = orb.radius * (1 + Math.sin(angle * 5 + Date.now()/200) * 0.3);
+                    const x = Math.cos(angle) * radius;
+                    const y = Math.sin(angle) * radius;
+                    if (i === 0) ctx.moveTo(x, y);
+                    else ctx.lineTo(x, y);
+                }
+                ctx.closePath();
+                ctx.fillStyle = `hsla(${orb.color.h}, 100%, 60%, 0.3)`;
+                ctx.fill();
+            }
+            
+            const glowIntensity = orb.state === 'supreme' ? 
+                0.8 : (0.3 + orb.mergeProgress * 0.5);
+            const glowSize = orb.radius * (
+                1.5 + 
+                Math.sin(orb.pulse * 3) * 0.5 + 
+                (orb.state === 'supreme' ? 0.5 : 0)
+            );
+            const gradient = ctx.createRadialGradient(0, 0, 0, 0, 0, glowSize);
+            gradient.addColorStop(0, `hsla(${orb.color.h}, 100%, 70%, ${glowIntensity})`);
+            gradient.addColorStop(1, 'hsla(0, 0%, 0%, 0)');
+            
+            ctx.fillStyle = gradient;
             ctx.beginPath();
-            ctx.arc(0, 0, orb.radius * 0.5, 0, Math.PI * 2);
+            ctx.arc(0, 0, glowSize, 0, Math.PI * 2);
             ctx.fill();
+            
+            let radius = orb.radius;
+            if (orb.state === 'merging') {
+                radius *= (1 + orb.mergeProgress * 0.5);
+            } else if (orb.state === 'supreme') {
+                radius *= (1.5 + orb.mergedOrbs * 0.1);
+            } else if (orb.state === 'teleporting') {
+                radius *= (1 - orb.teleportProgress * 0.5);
+            }
+            
+            ctx.beginPath();
+            ctx.arc(0, 0, radius, 0, Math.PI * 2);
+            ctx.fillStyle = `hsla(${orb.color.h}, 100%, 60%, 0.9)`;
+            ctx.fill();
+            
+            const corePulse = (orb.state === 'supreme' || orb.state === 'teleporting') ? 
+                (1 + Math.sin(Date.now()/200) * 0.3) : 1;
+            
+            ctx.beginPath();
+            ctx.arc(0, 0, radius * 0.4 * corePulse, 0, Math.PI * 2);
+            ctx.fillStyle = `hsla(${orb.color.h}, 100%, 80%, 0.8)`;
+            ctx.fill();
+            
+            if (orb.state === 'supreme' || orb.state === 'teleporting') {
+                for (let i = 0; i < 3; i++) {
+                    const coronaSize = radius * (1.2 + i * 0.3);
+                    const alpha = 0.3 - i * 0.1;
+                    ctx.beginPath();
+                    ctx.arc(0, 0, coronaSize, 0, Math.PI * 2);
+                    ctx.strokeStyle = `hsla(${orb.color.h}, 100%, 70%, ${alpha})`;
+                    ctx.lineWidth = 3;
+                    ctx.stroke();
+                }
+            }
             
             ctx.restore();
         }
 
-        function drawMagneticConnections() {
-            otherOrbs.forEach(other => {
-                const dx = other.position.x - (window.screenX + orb.position.x);
-                const dy = other.position.y - (window.screenY + orb.position.y);
-                const distance = Math.sqrt(dx * dx + dy * dy);
-                
-                if (distance < 800) {
-                    const opacity = Math.min(0.8, (1 - distance/800) * connectionForce);
-                    ctx.strokeStyle = `hsla(${orb.color.h}, 100%, 70%, ${opacity})`;
-                    ctx.lineWidth = 2 + 3 * connectionForce;
-                    ctx.beginPath();
-                    ctx.moveTo(orb.position.x, orb.position.y);
-                    ctx.lineTo(
-                        orb.position.x + dx * 0.9,
-                        orb.position.y + dy * 0.9
-                    );
-                    ctx.stroke();
-                    
-                    // Draw field lines
-                    if (connectionForce > 0.5) {
-                        drawFieldLines(orb.position.x, orb.position.y, 
-                                      orb.position.x + dx, orb.position.y + dy);
-                    }
-                }
-            });
-        }
-
-        function drawFieldLines(x1, y1, x2, y2) {
-            const segments = 8;
-            const curve = 50 * connectionForce;
+        // ====== MAIN LOOP ======
+        function update() {
+            orb.pulse += 0.05;
+            orb.screenX = window.screenX;
+            orb.screenY = window.screenY;
             
-            ctx.strokeStyle = `hsla(${orb.color.h}, 100%, 80%, ${connectionForce * 0.3})`;
-            ctx.lineWidth = 1;
-            
-            for (let i = 0; i < 3; i++) {
-                ctx.beginPath();
-                ctx.moveTo(x1, y1);
-                
-                for (let s = 1; s <= segments; s++) {
-                    const t = s / segments;
-                    const cx = x1 + (x2 - x1) * t;
-                    const cy = y1 + (y2 - y1) * t + 
-                              Math.sin(t * Math.PI) * curve * (i - 1);
-                    ctx.lineTo(cx, cy);
-                }
-                
-                ctx.stroke();
+            if (orb.state === 'connecting') {
+                orb.energy = 50 + Math.sin(Date.now()/300) * 10;
+                orb.color.h = (orb.color.h + 0.2) % 360;
+                checkMerge();
             }
-        }
-
-        // ========== ANIMATION LOOP ==========
-        function animate() {
-            updatePhysics();
+            else if (orb.state === 'attracting') {
+                updateAttraction();
+            }
+            else if (orb.state === 'merging') {
+                updateMerge();
+            }
+            else if (orb.state === 'supreme') {
+                orb.energy = 100 + (50 * orb.mergedOrbs) + Math.sin(Date.now()/150) * 10;
+                orb.color.h = (orb.color.h + 0.3) % 360;
+            }
+            else if (orb.state === 'teleporting') {
+                updateTeleport();
+            }
+            
+            updateEffects();
             render();
-            requestAnimationFrame(animate);
+            
+            requestAnimationFrame(update);
         }
 
-        // Handle resize
+        function updateStatus(text) {
+            document.getElementById('status').textContent = text;
+        }
+
+        // ====== INITIALIZATION ======
+        setupConnection();
+        update();
+
         window.addEventListener('resize', () => {
             width = window.innerWidth;
             height = window.innerHeight;
             canvas.width = width;
             canvas.height = height;
-            orb.position.x = width / 2;
-            orb.position.y = height / 2;
-            orb.radius = Math.min(width, height) * 0.25;
+            orb.radius = Math.min(width, height) * 0.2;
+            
+            if (orb.state === 'waiting' || orb.state === 'connecting') {
+                orb.x = width/2;
+                orb.y = height/2;
+            }
         });
 
-        // iOS permission handling
-        if (typeof DeviceOrientationEvent !== 'undefined' && 
-            typeof DeviceOrientationEvent.requestPermission === 'function') {
-            document.body.addEventListener('click', () => {
-                DeviceOrientationEvent.requestPermission()
-                    .then(response => {
-                        if (response === 'granted') {
-                            window.addEventListener('deviceorientation', handleOrientation);
-                        }
-                    })
-                    .catch(console.error);
-            }, { once: true });
-        }
-
-        // Start animation
-        animate();
+        window.addEventListener('beforeunload', () => {
+            const message = {
+                type: 'goodbye',
+                id: orb.id,
+                timestamp: Date.now()
+            };
+            try {
+                if (connectionChannel) {
+                    connectionChannel.postMessage(message);
+                }
+                localStorage.setItem(CHANNEL_NAME, JSON.stringify(message));
+                localStorage.removeItem(CHANNEL_NAME);
+            } catch (e) {
+                console.error("Goodbye message failed:", e);
+            }
+        });
     </script>
 </body>
 </html>
