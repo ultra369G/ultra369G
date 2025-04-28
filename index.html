@@ -29,6 +29,20 @@
             font-size: 1.2em;
             z-index: 100;
         }
+        #compass {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            width: 60px;
+            height: 60px;
+            background: rgba(0,0,0,0.5);
+            border-radius: 50%;
+            display: none;
+            justify-content: center;
+            align-items: center;
+            color: white;
+            font-size: 24px;
+        }
         #swipe-hint {
             position: absolute;
             top: 50%;
@@ -38,12 +52,23 @@
             font-size: 1.5em;
             display: none;
         }
+        #connection-status {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            width: 15px;
+            height: 15px;
+            border-radius: 50%;
+            background: #f00;
+        }
     </style>
 </head>
 <body>
     <canvas id="orbCanvas"></canvas>
-    <div id="status">🌀hehe for cosmic connection..hhehe.</div>
-    <div id="swipe-hint">Swipe to teleport orb </div>
+    <div id="status">🌀 Initializing cosmic connection...</div>
+    <div id="compass">↑</div>
+    <div id="swipe-hint">Swipe to teleport orb</div>
+    <div id="connection-status" title="Disconnected"></div>
 
     <script>
         // ====== CORE SETUP ======
@@ -54,6 +79,11 @@
         canvas.width = width;
         canvas.height = height;
 
+        // ====== COMMUNICATION CHANNEL ======
+        // Using BroadcastChannel as it works on GitHub Pages without server
+        const connectionChannel = new BroadcastChannel('cosmic_orb_fusion');
+        let otherOrbs = [];
+
         // ====== COSMIC ORB ======
         const orb = {
             x: width/2,
@@ -62,13 +92,15 @@
             energy: 50,
             color: { h: Math.random() * 360, s: 100, l: 60 },
             pulse: 0,
-            state: 'waiting', // 'waiting', 'connecting', 'merging', 'supreme', 'teleporting'
+            state: 'waiting', // 'waiting', 'connecting', 'attracting', 'merging', 'supreme', 'teleporting'
             mergeProgress: 0,
             teleportProgress: 0,
             birthTime: Date.now(),
             id: Math.random().toString(36).substr(2, 9),
             screenX: window.screenX,
             screenY: window.screenY,
+            screenWidth: window.screen.width,
+            screenHeight: window.screen.height,
             isSupreme: false,
             mergedOrbs: 0
         };
@@ -94,35 +126,48 @@
             const dx = touchEndX - touchStartX;
             const dy = touchEndY - touchStartY;
             
-            // Check if swipe meets threshold
             if (Math.abs(dx) > swipeThreshold || Math.abs(dy) > swipeThreshold) {
                 handleSwipe(dx, dy);
             }
         });
 
         function handleSwipe(dx, dy) {
-            // Find all available devices/tabs (excluding self)
             const availableOrbs = otherOrbs.filter(o => 
                 o.state !== 'teleporting' && o.id !== orb.id
             );
             
-            if (availableOrbs.length === 0) return;
+            if (availableOrbs.length === 0) {
+                updateStatus("⚠️ No other devices detected");
+                return;
+            }
             
-            // Calculate swipe angle
             const swipeAngle = Math.atan2(dy, dx);
+            const centerX = orb.screenX + orb.x;
+            const centerY = orb.screenY + orb.y;
             
-            // Find device in swipe direction
+            // Find orb in swipe direction using compass logic
             const targetOrb = availableOrbs.reduce((nearest, o) => {
-                const orbAngle = Math.atan2(
-                    (o.screenY + o.y) - (orb.screenY + orb.y),
-                    (o.screenX + o.x) - (orb.screenX + orb.x)
+                const targetCenterX = o.screenX + o.x;
+                const targetCenterY = o.screenY + o.y;
+                
+                const angleToTarget = Math.atan2(
+                    targetCenterY - centerY,
+                    targetCenterX - centerX
                 );
-                const angleDiff = Math.abs(swipeAngle - orbAngle);
-                return angleDiff < Math.abs(swipeAngle - nearest.angle) ? 
-                    { orb: o, angle: angleDiff } : nearest;
-            }, { orb: availableOrbs[0], angle: Infinity }).orb;
+                
+                const angleDiff = Math.abs(swipeAngle - angleToTarget);
+                const distance = Math.sqrt(
+                    Math.pow(targetCenterX - centerX, 2) + 
+                    Math.pow(targetCenterY - centerY, 2)
+                );
+                
+                // Prefer closer orbs in similar direction
+                const score = angleDiff * (distance / 1000);
+                
+                return score < nearest.score ? 
+                    { orb: o, score: score } : nearest;
+            }, { orb: availableOrbs[0], score: Infinity }).orb;
             
-            // Initiate teleport
             initiateTeleport(targetOrb);
         }
 
@@ -131,15 +176,12 @@
             orb.targetOrb = targetOrb;
             orb.teleportProgress = 0;
             updateStatus("🌀 Teleporting orb...");
+            document.getElementById('compass').style.display = 'none';
             broadcastState();
         }
 
-        // ====== TAB COMMUNICATION ======
-        let otherOrbs = [];
-        let connectionChannel;
-        
+        // ====== COMMUNICATION HANDLERS ======
         function setupConnection() {
-            connectionChannel = new BroadcastChannel('cosmic_orb_final');
             connectionChannel.addEventListener('message', (e) => {
                 if (e.data.id === orb.id) return;
                 
@@ -147,7 +189,6 @@
                 orb.screenX = window.screenX;
                 orb.screenY = window.screenY;
                 
-                // Handle special messages
                 if (e.data.type === 'teleport' && e.data.targetId === orb.id) {
                     receiveTeleport(e.data);
                     return;
@@ -167,19 +208,20 @@
                 // Remove old orbs
                 otherOrbs = otherOrbs.filter(o => Date.now() - o.timestamp < 3000);
                 
-                // Check for merge conditions
                 if (orb.state === 'connecting') checkMerge();
+                if (orb.state === 'attracting') updateAttraction();
                 if (orb.state === 'merging') updateMerge();
                 if (orb.state === 'teleporting') updateTeleport();
             });
             
             // Initial broadcast
             broadcastState();
+            document.getElementById('connection-status').style.background = '#0f0';
+            document.getElementById('connection-status').title = 'Connected';
         }
 
         function broadcastState() {
-            if (!connectionChannel) return;
-            connectionChannel.postMessage({
+            const message = {
                 id: orb.id,
                 x: orb.x,
                 y: orb.y,
@@ -191,10 +233,13 @@
                 birthTime: orb.birthTime,
                 screenX: window.screenX,
                 screenY: window.screenY,
+                screenWidth: window.screen.width,
+                screenHeight: window.screen.height,
                 isSupreme: orb.isSupreme,
                 mergedOrbs: orb.mergedOrbs,
                 timestamp: Date.now()
-            });
+            };
+            connectionChannel.postMessage(message);
         }
 
         function sendTeleport(targetId) {
@@ -216,6 +261,7 @@
             orb.mergedOrbs = teleportData.mergedOrbs;
             orb.isSupreme = true;
             updateStatus(`🌟 Supreme orb (${orb.mergedOrbs+1} merged) - Swipe to teleport`);
+            document.getElementById('compass').style.display = 'flex';
             document.getElementById('swipe-hint').style.display = 'block';
             createParticles(orb.x, orb.y, 50, orb.color.h, 3);
             createShockwave(orb.x, orb.y);
@@ -226,56 +272,116 @@
         function startConnection() {
             orb.state = 'connecting';
             updateStatus("⚡ Detected cosmic orbs...");
+            document.getElementById('compass').style.display = 'flex';
             broadcastState();
         }
 
         function checkMerge() {
-            // Find the oldest orb (will become supreme)
             const allOrbs = [...otherOrbs, orb];
             const oldestOrb = allOrbs.reduce((oldest, o) => 
                 o.birthTime < oldest.birthTime ? o : oldest);
             
             if (oldestOrb.id === orb.id) {
-                // We are the supreme orb
-                orb.state = 'merging';
+                // We are the oldest - become supreme
+                orb.state = 'attracting';
                 orb.isSupreme = true;
-                updateStatus("🌀 Merging cosmic energy...");
-                document.getElementById('swipe-hint').style.display = 'none';
+                updateStatus("🌀 Drawing in cosmic energy...");
+            } else {
+                // We will merge into the oldest orb
+                orb.state = 'attracting';
+                orb.targetOrb = oldestOrb;
+                updateStatus("🌀 Being drawn to the cosmic merge...");
+            }
+            broadcastState();
+        }
+
+        function updateAttraction() {
+            if (orb.isSupreme) {
+                // We're the supreme orb - attract others to us
+                let mergingCount = 0;
+                let totalHue = orb.color.h;
+                
+                otherOrbs.forEach(o => {
+                    if (o.state === 'attracting' && o.targetOrb?.id === orb.id) {
+                        mergingCount++;
+                        totalHue += o.color.h;
+                        
+                        // Calculate direction to this orb
+                        const direction = Math.atan2(
+                            (o.screenY + o.y) - (orb.screenY + orb.y),
+                            (o.screenX + o.x) - (orb.screenX + orb.x)
+                        );
+                        
+                        // Visualize connection
+                        createEnergyBeam(
+                            orb.x, orb.y,
+                            o.x + (o.screenX - orb.screenX),
+                            o.y + (o.screenY - orb.screenY),
+                            o.color.h
+                        );
+                    }
+                });
+                
+                // Update color based on merging orbs
+                orb.color.h = (totalHue / (mergingCount + 1)) % 360;
+                orb.mergedOrbs = mergingCount;
+                orb.energy = 50 + (mergingCount * 20);
+                
+                if (mergingCount > 0 && orb.state !== 'merging') {
+                    orb.state = 'merging';
+                    updateStatus("💫 Merging cosmic energies...");
+                }
+            } else if (orb.targetOrb) {
+                // We're being attracted to the supreme orb
+                const direction = Math.atan2(
+                    (orb.targetOrb.screenY + orb.targetOrb.y) - (orb.screenY + orb.y),
+                    (orb.targetOrb.screenX + orb.targetOrb.x) - (orb.screenX + orb.x)
+                );
+                
+                updateCompass(direction);
+                
+                // Move toward target
+                const distance = Math.sqrt(
+                    Math.pow((orb.targetOrb.screenX + orb.targetOrb.x) - (orb.screenX + orb.x), 2) +
+                    Math.pow((orb.targetOrb.screenY + orb.targetOrb.y) - (orb.screenY + orb.y), 2)
+                );
+                
+                const force = Math.min(15, 5000/(distance));
+                orb.x += Math.cos(direction) * force;
+                orb.y += Math.sin(direction) * force;
+                
+                if (distance < 50) {
+                    orb.state = 'merging';
+                    updateStatus("💥 Cosmic fusion initiated!");
+                }
             }
             broadcastState();
         }
 
         function updateMerge() {
-            // Count how many orbs are merging into us
-            const mergingOrbs = otherOrbs.filter(o => 
-                o.state === 'merging' && o.targetOrb?.id === orb.id
-            ).length;
-            
-            // Update merge progress
             orb.mergeProgress = Math.min(1, orb.mergeProgress + 0.01);
-            orb.mergedOrbs = mergingOrbs;
             
-            // Calculate blended color from all merging orbs
-            if (otherOrbs.length > 0) {
-                let totalHue = orb.color.h;
-                otherOrbs.forEach(o => {
-                    if (o.state === 'merging' && o.targetOrb?.id === orb.id) {
-                        totalHue += o.color.h;
-                    }
-                });
-                orb.color.h = (totalHue / (mergingOrbs + 1)) % 360;
-            }
-            
-            // Increase energy based on merged orbs
-            orb.energy = 50 + (100 * orb.mergeProgress) + (20 * mergingOrbs);
-            
-            if (orb.mergeProgress >= 1) {
-                // Merge complete
-                orb.state = 'supreme';
-                updateStatus(`🌟 Supreme orb (${orb.mergedOrbs+1} merged) - Swipe to teleport`);
-                document.getElementById('swipe-hint').style.display = 'block';
-                createShockwave(orb.x, orb.y);
-                createParticles(orb.x, orb.y, 100, orb.color.h, 3);
+            if (orb.isSupreme) {
+                // We're the supreme orb - grow stronger
+                orb.energy = 100 + (orb.mergedOrbs * 30) + (50 * orb.mergeProgress);
+                
+                if (orb.mergeProgress >= 1) {
+                    updateStatus(`🌟 SUPREME ORB (${orb.mergedOrbs+1} merged) - Swipe to teleport`);
+                    document.getElementById('swipe-hint').style.display = 'block';
+                    createShockwave(orb.x, orb.y);
+                    createParticles(orb.x, orb.y, 100, orb.color.h, 3);
+                }
+            } else {
+                // We're merging into another orb - fade away
+                orb.energy = Math.max(0, orb.energy - 1);
+                
+                if (orb.mergeProgress >= 1) {
+                    orb.state = 'waiting';
+                    orb.mergeProgress = 0;
+                    orb.energy = 50;
+                    updateStatus("🌀 Merged with supreme orb");
+                    document.getElementById('compass').style.display = 'none';
+                }
             }
             broadcastState();
         }
@@ -284,7 +390,6 @@
             orb.teleportProgress = Math.min(1, orb.teleportProgress + 0.05);
             
             if (orb.teleportProgress >= 1) {
-                // Teleport complete
                 sendTeleport(orb.targetOrb.id);
                 orb.state = 'waiting';
                 orb.teleportProgress = 0;
@@ -292,9 +397,16 @@
                 orb.energy = 50;
                 orb.mergedOrbs = 0;
                 updateStatus("🌀 Orb teleported away");
-                document.getElementById('swipe-hint').style.display = 'none';
             }
             broadcastState();
+        }
+
+        function updateCompass(angle) {
+            const compass = document.getElementById('compass');
+            const directions = ['↑', '↗', '→', '↘', '↓', '↙', '←', '↖'];
+            const index = Math.round((angle + Math.PI) / (Math.PI/4)) % 8;
+            compass.textContent = directions[index];
+            compass.style.transform = `rotate(${angle}rad)`;
         }
 
         // ====== VISUAL EFFECTS ======
@@ -343,19 +455,11 @@
             if (orb.state === 'connecting' && Math.random() < 0.2) {
                 createParticles(orb.x, orb.y, 3);
             }
-            if (orb.state === 'merging') {
-                // Create energy beams to all merging orbs
-                otherOrbs.forEach(o => {
-                    if (o.state === 'merging' && o.targetOrb?.id === orb.id) {
-                        const targetX = o.x + (o.screenX - orb.screenX);
-                        const targetY = o.y + (o.screenY - orb.screenY);
-                        createEnergyBeam(orb.x, orb.y, targetX, targetY, o.color.h);
-                    }
-                });
-                
-                if (Math.random() < 0.3) {
-                    createParticles(orb.x, orb.y, 5, orb.color.h, 2);
-                }
+            if (orb.state === 'attracting' && Math.random() < 0.3) {
+                createParticles(orb.x, orb.y, 2, orb.color.h, 2);
+            }
+            if (orb.state === 'merging' && Math.random() < 0.5) {
+                createParticles(orb.x, orb.y, 5, (orb.color.h + 30) % 360, 2);
             }
             if (orb.state === 'supreme' && Math.random() < 0.1) {
                 createParticles(orb.x, orb.y, 2, (orb.color.h + 15) % 360);
@@ -466,7 +570,6 @@
             
             // Outer distortion field
             if (orb.state === 'merging' || orb.state === 'teleporting') {
-                const distortion = Math.sin(Date.now()/100) * 20;
                 ctx.beginPath();
                 for (let i = 0; i < 64; i++) {
                     const angle = (i/64) * Math.PI * 2;
@@ -550,6 +653,9 @@
                 orb.color.h = (orb.color.h + 0.2) % 360;
                 checkMerge();
             }
+            else if (orb.state === 'attracting') {
+                updateAttraction();
+            }
             else if (orb.state === 'merging') {
                 updateMerge();
             }
@@ -576,7 +682,6 @@
         setupConnection();
         update();
 
-        // Handle resize
         window.addEventListener('resize', () => {
             width = window.innerWidth;
             height = window.innerHeight;
@@ -584,21 +689,17 @@
             canvas.height = height;
             orb.radius = Math.min(width, height) * 0.2;
             
-            // Reset position if not merging/teleporting
             if (orb.state === 'waiting' || orb.state === 'connecting') {
                 orb.x = width/2;
                 orb.y = height/2;
             }
         });
 
-        // Reset on refresh
         window.addEventListener('beforeunload', () => {
-            if (connectionChannel) {
-                connectionChannel.postMessage({
-                    type: 'goodbye',
-                    id: orb.id
-                });
-            }
+            connectionChannel.postMessage({
+                type: 'goodbye',
+                id: orb.id
+            });
         });
     </script>
 </body>
